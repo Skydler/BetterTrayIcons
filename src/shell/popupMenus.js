@@ -47,7 +47,6 @@ export function createPanelMenu(sourceActor, {configure = null, ownSurface = fal
             applyMenuBoxStyle(menu);
     });
 
-    // Popup effects watch uiGroup's children, not menus inside a private layer.
     Main.layoutManager.uiGroup.add_child(menu.actor);
     menu.actor.hide();
     return menu;
@@ -149,8 +148,13 @@ export function destroyMenuSafely(menu) {
 const _flyoutMenus = [];
 let _flyoutGrabState = null;
 
-// Grab the common UI parent so the menus underneath stay clickable without
-// putting their actors inside a private layer.
+export function clearFlyoutMenus() {
+    for (const menu of [..._flyoutMenus].reverse())
+        menu._releaseGrab();
+    _flyoutMenus.length = 0;
+    _flyoutGrabState = null;
+}
+
 export class FlyoutMenu extends PopupMenu.PopupMenu {
     constructor(item) {
         super(item, 0, St.Side.LEFT);
@@ -214,20 +218,23 @@ export class FlyoutMenu extends PopupMenu.PopupMenu {
 
     _onCapturedEvent(event) {
         // Nested flyouts share the capture actor; only the top grab handles input.
-        if (Main.modalActorFocusStack.at(-1)?.grab !== this._grab)
+        if (_flyoutMenus.at(-1) !== this)
             return Clutter.EVENT_PROPAGATE;
 
         const type = event.type();
-        if (type === Clutter.EventType.KEY_PRESS)
-            return this._handleFlyoutKey(event);
-
-        const isPress = type === Clutter.EventType.BUTTON_PRESS ||
-            type === Clutter.EventType.TOUCH_BEGIN;
-        if (!isPress)
-            return Clutter.EVENT_PROPAGATE;
+        if (type === Clutter.EventType.KEY_PRESS &&
+            this._handleFlyoutKey(event) === Clutter.EVENT_STOP)
+            return Clutter.EVENT_STOP;
 
         const target = global.stage.get_event_actor(event);
         const chain = menuChainFrom(this);
+        const isPress = type === Clutter.EventType.BUTTON_PRESS ||
+            type === Clutter.EventType.TOUCH_BEGIN;
+        if (!isPress) {
+            return chain.some(menu => menu.actor.contains(target))
+                ? Clutter.EVENT_PROPAGATE : Clutter.EVENT_STOP;
+        }
+
         // Every link but the last hangs off a menu item. A press on that item
         // runs its own toggle, closing here would let the release reopen it.
         const toggled = chain.slice(0, -1).find(menu => menu.sourceActor.contains(target));
